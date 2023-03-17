@@ -1,0 +1,21 @@
+[package]
+name = "mp4box"
+version = "0.1.0"
+edition = "2021"
+authors = ["lomavkin <lomavkin@gmail.com>"]
+description = "MP4 reader and writer library in Rust."
+readme = "README.md"
+homepage = "https://github.com/lomavkin/mp4rs"
+repository = "https://github.com/lomavkin/mp4rs"
+keywords = ["mp4", "iso-mp4", "isobmff", "video", "multimedia"]
+license = "MIT"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+thiserror = "^1.0"
+byteorder = "1"
+bytes = "1.1.0"
+num-rational = { version = "0.4.0", features = ["serde"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
