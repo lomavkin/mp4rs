@@ -2,23 +2,34 @@ use std::io::{Read, Seek};
 
 use crate::boxes::{self, BoxData, BoxHeader, BoxType, Mp4Box, Mp4BoxTree, PhtmBox, ReadBox};
 use crate::error::Error;
-
-type Result<T> = std::result::Result<T, Error>;
+use crate::{Result, Scanning};
 
 macro_rules! dispatch {
-    ( $self:expr, $reader:expr, $header:expr; $( $field:ident => $value:ident, )* ) => {
-        dispatch!( $self, $reader, $header; $( $field => $value ),* )
+    ( $self:expr, $reader:expr, $header:expr, $callback:expr; $( $field:ident => $value:ident, )* ) => {
+        dispatch!( $self, $reader, $header, $callback; $( $field => $value ),* )
     };
-    ( $self:expr, $reader:expr, $header:expr; $( $field:ident => $value:ident ),* ) => {
+    ( $self:expr, $reader:expr, $header:expr, $callback:expr; $( $field:ident => $value:ident ),* ) => {
         match $header.typ {
             $(
                 BoxType::$field => {
                     let b = boxes::$value::read($reader, &$header)?;
                     let data = BoxData::$field(b);
-                    $self.traverse($reader, $header, data)?;
+
+                    let mut scanning = Scanning::Continue;
+                    if let Some(c) = $callback {
+                        scanning = c(&data)
+                    }
+                    match scanning {
+                        Scanning::Continue => $self.traverse($reader, $header, data, $callback)?,
+                        _ => ()
+                    }
+                    scanning
                 }
             )*
-            _ => $header.skip_box($reader)?,
+            _ => {
+                $header.skip_box($reader)?;
+                Scanning::Continue
+            },
         }
     };
 }
@@ -36,6 +47,7 @@ impl Mp4BoxTree {
         reader: &mut R,
         header: BoxHeader,
         data: BoxData,
+        callback: &mut Option<&mut dyn FnMut(&BoxData) -> Scanning>,
     ) -> Result<()> {
         let skip_size = data.effective_size();
         let box_start = header.box_start() + skip_size;
@@ -45,19 +57,29 @@ impl Mp4BoxTree {
         let mut tree = Self::new(mp4);
         let remain = header.size - skip_size;
         if remain > boxes::HEADER_SIZE {
-            let new_tree = tree.read(reader, box_start + remain)?;
-            self.children.push(new_tree);
+            let new_tree = tree.read(reader, box_start + remain, callback)?;
+            if let Some(t) = new_tree {
+                self.children.push(t);
+            }
         } else {
             if remain > 0 {
                 // skip because readable data is left but it is less than header size
                 boxes::rel_skip(reader, remain)?;
             }
-            self.children.push(tree);
+            match callback {
+                None => self.children.push(tree),
+                _ => (),
+            }
         }
         Ok(())
     }
 
-    fn read<R: Read + Seek>(&mut self, reader: &mut R, size: u64) -> Result<Self> {
+    fn read<R: Read + Seek>(
+        &mut self,
+        reader: &mut R,
+        size: u64,
+        callback: &mut Option<&mut dyn FnMut(&BoxData) -> Scanning>,
+    ) -> Result<Option<Self>> {
         let start = reader.stream_position()?;
 
         let mut current = start;
@@ -73,8 +95,8 @@ impl Mp4BoxTree {
                 break;
             }
 
-            dispatch! {
-                self, reader, header;
+            let scanning = dispatch! {
+                self, reader, header, callback;
                 Ftyp => FtypBox,
                 Moov => MoovBox,
                 Mvhd => MvhdBox,
@@ -103,9 +125,18 @@ impl Mp4BoxTree {
                 Stco => StcoBox,
             };
 
+            match scanning {
+                Scanning::Stop => break,
+                _ => (),
+            }
+
             current = reader.stream_position()?;
         }
-        Ok(self.clone())
+
+        match callback {
+            None => Ok(Some(self.clone())),
+            _ => Ok(None),
+        }
     }
 
     pub fn node_header_ref(&self) -> &BoxHeader {
@@ -137,6 +168,18 @@ impl Mp4Box {
 pub fn read_mp4_box<R: Read + Seek>(reader: &mut R, size: u64) -> Result<Vec<Mp4BoxTree>> {
     let phtm = Mp4Box::phtm();
     let mut tree = Mp4BoxTree::new(phtm);
-    let root = tree.read(reader, size)?;
+    let mut c = None as Option<&mut dyn FnMut(&BoxData) -> Scanning>;
+    let root = tree.read(reader, size, &mut c)?.unwrap();
     Ok(root.children)
+}
+
+pub fn scan_mp4_box<R: Read + Seek, C: FnMut(&BoxData) -> Scanning>(
+    reader: &mut R,
+    size: u64,
+    callback: &mut C,
+) -> Result<()> {
+    let phtm = Mp4Box::phtm();
+    let mut tree = Mp4BoxTree::new(phtm);
+    _ = tree.read(reader, size, &mut Option::Some(callback))?;
+    Ok(())
 }

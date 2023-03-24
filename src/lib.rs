@@ -15,11 +15,22 @@ pub use reader::*;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+pub enum Scanning {
+    Stop,
+    Continue,
+}
+
 pub fn read_mp4_box(f: File) -> Result<Vec<Mp4BoxTree>> {
     let size = f.metadata()?.len();
     let mut reader = BufReader::new(f);
     let tree = reader::read_mp4_box(&mut reader, size)?;
     Ok(tree)
+}
+
+pub fn scan_mp4_box<C: FnMut(&BoxData) -> Scanning>(f: File, c: &mut C) -> Result<()> {
+    let size = f.metadata()?.len();
+    let mut reader = BufReader::new(f);
+    Ok(reader::scan_mp4_box(&mut reader, size, c)?)
 }
 
 pub fn debug_dump_mp4_box(trees: &Vec<Mp4BoxTree>) {
